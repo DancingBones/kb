@@ -66,6 +66,8 @@ It checks each scope, then pulls every contact in the background. Every 6 hours 
 
 **Or with an API key:** put `ANTHROPIC_API_KEY=...` in `.env` and set `KB_AUTO_SUMMARIZE=1`. Uses `claude-haiku-5-5`.
 
+HighLevel contacts use a client prompt instead: a snapshot segment plus atoms typed condition, goal, status, next_step, preference, payment and fact.
+
 Check what is waiting (spends nothing): `sudo -u kb KB_HOME=/opt/kb /opt/kb/venv/bin/python /opt/kb/kb/summarize.py --estimate`
 
 ## Upload Claude Code sessions from your computers

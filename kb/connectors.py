@@ -422,7 +422,7 @@ def _ghl_ts(v):
         return ""
 
 
-GHL_FORMAT = "2"  # bump when the document layout changes, so the next run rebuilds every contact
+GHL_FORMAT = "3"  # bump when the document layout changes, so the next run rebuilds every contact
 
 
 def _ghl_local(v):
