@@ -231,4 +231,10 @@ def header(con):
     stale = ""
     if last and _age_days(last) > 0.5:
         stale = "  (STALE: last ingest over 12 hours ago, run ingest_all.py)"
-    return f"[kb] {s} rows · last ingest {last or 'never'}{stale}"
+    warn = ""
+    for (src,) in con.execute("SELECT DISTINCT source FROM ingest_log").fetchall():
+        r = con.execute("SELECT ok, detail FROM ingest_log WHERE source=? ORDER BY id DESC LIMIT 1", (src,)).fetchone()
+        if r and not r[0]:
+            hint = " (sign-in expired: run kb/gmail_auth.py again)" if src == "gmail" and "invalid_grant" in (r[1] or "") else ""
+            warn += f"\n[kb] WARNING: last {src} ingest failed{hint}: {(r[1] or '')[:150]}"
+    return f"[kb] {s} rows · last ingest {last or 'never'}{stale}{warn}"
