@@ -10,6 +10,8 @@ read -r -s -p "App password (16 letters, paste with right-click, it stays hidden
 U=$(printf '%s' "$U" | sed 's/\x1b\[[0-9]*~//g' | tr -d '[:space:]~')
 P=$(printf '%s' "$P" | sed 's/\x1b\[[0-9]*~//g' | tr -cd 'A-Za-z')
 [[ "$U" == *@* ]] || { echo "That doesn't look like an email address."; exit 1; }
+# A paste that landed twice gives 32 letters: keep one copy.
+if [ ${#P} -eq 32 ] && [ "${P:0:16}" = "${P:16:16}" ]; then P=${P:0:16}; fi
 [ ${#P} -eq 16 ] || { echo "App password should be 16 letters, got ${#P}. Try again."; exit 1; }
 sed -i '/^GMAIL_USER=/d;/^GMAIL_APP_PASSWORD=/d' "$ENVF"
 printf 'GMAIL_USER=%s\nGMAIL_APP_PASSWORD=%s\n' "$U" "$P" >> "$ENVF"
