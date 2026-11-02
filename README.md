@@ -50,15 +50,13 @@ The connector opens All Mail in read-only mode (it never marks mail as read or c
 
 Either way: first run pulls 12 months, later runs the last 4 days. Password reset, verification and 2FA emails are skipped; anything that looks like a key or password is masked before it is stored.
 
-## Anthropic key and summaries
+## Summaries (Claude Haiku)
 
-Put `ANTHROPIC_API_KEY=...` in `/opt/kb/.env` (`nano /opt/kb/.env`). Then:
+**On your Claude plan (no API bill):** `bash /opt/kb/deploy/set_claude.sh`. It installs Claude Code for the `kb` user, runs `claude setup-token` (sign in once, the token lasts about a year), saves `CLAUDE_CODE_OAUTH_TOKEN` in `.env`, tests it, and turns on `KB_AUTO_SUMMARIZE`. Each 6-hour run summarizes up to `KB_SUMMARY_MAX_PER_RUN` (default 150) items with `claude -p --model haiku --tools ""` (no tools, empty folder), so it uses plan limits gradually.
 
-```bash
-sudo -u kb KB_HOME=/opt/kb /opt/kb/venv/bin/python /opt/kb/kb/summarize.py --estimate   # count + cost, spends nothing
-sudo -u kb KB_HOME=/opt/kb /opt/kb/venv/bin/python /opt/kb/kb/summarize.py              # run the backfill
-```
-Set `KB_AUTO_SUMMARIZE=1` in `.env` to summarize new long items on every ingest.
+**Or with an API key:** put `ANTHROPIC_API_KEY=...` in `.env` and set `KB_AUTO_SUMMARIZE=1`. Uses `claude-haiku-5-5`.
+
+Check what is waiting (spends nothing): `sudo -u kb KB_HOME=/opt/kb /opt/kb/venv/bin/python /opt/kb/kb/summarize.py --estimate`
 
 ## Upload Claude Code sessions from your computer
 

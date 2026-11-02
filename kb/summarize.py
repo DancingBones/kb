@@ -2,7 +2,11 @@
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
 
 from db import connect, init, mask
 
@@ -67,24 +71,68 @@ def _load_key():
                 os.environ["ANTHROPIC_API_KEY"] = line.split("=", 1)[1].strip().strip('"\'')
 
 
-def run(con, limit=None):
+def backend():
+    """'claude_code' (your Claude plan via the claude CLI) when a CLAUDE_CODE_OAUTH_TOKEN is set,
+    otherwise 'api' when an ANTHROPIC_API_KEY is set, otherwise None."""
+    from db import env
+    tok = env("CLAUDE_CODE_OAUTH_TOKEN")
+    if tok:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = tok
+        return "claude_code"
     _load_key()
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return "skipped: no ANTHROPIC_API_KEY in .env"
-    import anthropic
-    client = anthropic.Anthropic()
+    return "api" if os.environ.get("ANTHROPIC_API_KEY") else None
+
+
+def _claude_bin():
+    from db import KB_HOME
+    for p in (shutil.which("claude"), os.path.join(KB_HOME, ".local", "bin", "claude")):
+        if p and os.path.exists(p):
+            return p
+    raise RuntimeError("claude CLI not installed; run deploy/set_claude.sh")
+
+
+def _ask_claude_code(prompt):
+    """One headless call on the user's Claude plan. No tools, empty working folder:
+    the email text is data and must never be able to make it do anything."""
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    with tempfile.TemporaryDirectory() as d:
+        r = subprocess.run(
+            [_claude_bin(), "-p", "--model", os.environ.get("KB_CC_MODEL", "haiku"), "--output-format", "text",
+             "--tools", "",
+             "--disallowedTools", "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Task"],
+            input=prompt, capture_output=True, text=True, timeout=300, cwd=d, env=env)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip()[:300])
+    return r.stdout
+
+
+def run(con, limit=None):
+    from db import env
+    which = backend()
+    if not which:
+        return "skipped: no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env"
+    if limit is None and which == "claude_code":
+        limit = int(env("KB_SUMMARY_MAX_PER_RUN", "150"))  # spread plan usage over several runs
+    client = None
+    if which == "api":
+        import anthropic
+        client = anthropic.Anthropic()
     done = failed = 0
     for r in pending(con)[: limit or None]:
         text = full_text(con, r["source"], r["source_id"])[:MAX_INPUT_CHARS]
         prompt = (PROMPT.replace("{source}", r["source"]).replace("{title}", r["title"] or "")
                   .replace("{ts}", r["ts"]).replace("{text}", text))
         try:
-            msg = client.messages.create(
-                model=MODEL, max_tokens=8000,
-                output_config={"effort": "low"},
-                messages=[{"role": "user", "content": prompt}],
-            )
-            out = "".join(b.text for b in msg.content if b.type == "text").strip()
+            if which == "claude_code":
+                out = _ask_claude_code(prompt).strip()
+                time.sleep(float(env("KB_SUMMARY_PAUSE", "2")))
+            else:
+                msg = client.messages.create(
+                    model=MODEL, max_tokens=8000,
+                    output_config={"effort": "low"},
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                out = "".join(b.text for b in msg.content if b.type == "text").strip()
             out = out[out.find("{"): out.rfind("}") + 1]
             data = json.loads(out)
         except Exception as e:  # keep going; item stays pending for the next run
@@ -103,11 +151,11 @@ def run(con, limit=None):
                 "INSERT INTO docs(kind,source,source_id,ts,title,content,metadata) VALUES('atom',?,?,?,?,?,?)",
                 (r["source"], r["source_id"], r["ts"], f"{a.get('type','fact')}: {r['title'] or ''}"[:200],
                  mask(a.get("text", "")), json.dumps(dict(base, atom_type=a.get("type")))))
-        meta["summarized"] = MODEL
+        meta["summarized"] = MODEL if which == "api" else "claude-code:" + os.environ.get("KB_CC_MODEL", "haiku")
         con.execute("UPDATE docs SET metadata=? WHERE id=?", (json.dumps(meta), r["id"]))
         con.commit()
         done += 1
-    return f"{done} items summarized, {failed} failed"
+    return f"{done} items summarized, {failed} failed ({which})"
 
 
 if __name__ == "__main__":
@@ -118,6 +166,11 @@ if __name__ == "__main__":
     con = connect()
     init(con)
     n, tin, tout, cost = estimate(con)
-    print(f"{n} items waiting for summaries, about {tin:,} input + {tout:,} output tokens, estimated ${cost:.2f} with {MODEL}")
+    which = backend()
+    if which == "claude_code":
+        print(f"{n} items waiting for summaries, about {tin:,} input + {tout:,} output tokens. "
+              f"Runs on your Claude plan (Haiku), up to {os.environ.get('KB_SUMMARY_MAX_PER_RUN', 150)} per ingest; no API charges.")
+    else:
+        print(f"{n} items waiting for summaries, about {tin:,} input + {tout:,} output tokens, estimated ${cost:.2f} with {MODEL} (API)")
     if not a.estimate:
         print(run(con, a.limit))
