@@ -62,7 +62,9 @@ def _decode(data):
 def _html_to_text(h):
     h = re.sub(r"(?is)<(script|style).*?</\1>", " ", h)
     h = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>", "\n", h)
-    return unescape(re.sub(r"<[^>]+>", " ", h))
+    t = unescape(re.sub(r"<[^>]+>", " ", h)).replace("\xa0", " ")
+    t = re.sub(r"[ \t]+", " ", t)
+    return re.sub(r"\s*\n\s*", "\n", t).strip()
 
 
 def _body(payload):
