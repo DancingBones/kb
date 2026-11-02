@@ -37,7 +37,7 @@ printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\nKB_AUTO_SUMMARIZE=1\n' "$T" >> "$ENVF"
 chown kb:kb "$ENVF"; chmod 600 "$ENVF"
 
 echo "== Testing"
-if OUT=$(cd /tmp && sudo -u kb env HOME="$KBH" CLAUDE_CODE_OAUTH_TOKEN="$T" "$CL" -p --model haiku --tools "" "Reply with just: ok" 2>&1); then
+if OUT=$(cd /tmp && echo "Reply with just: ok" | sudo -u kb env HOME="$KBH" CLAUDE_CODE_OAUTH_TOKEN="$T" "$CL" -p --model haiku --tools "" 2>&1); then
   echo "Claude replied: $OUT"
 else
   echo "Test failed: $OUT"; exit 1
