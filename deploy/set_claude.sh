@@ -5,11 +5,16 @@ set -euo pipefail
 KB=/opt/kb; ENVF=$KB/.env
 [ "$(id -u)" = 0 ] || { echo "Run as root"; exit 1; }
 
-if [ ! -x "$KB/.local/bin/claude" ]; then
+# The kb user gets its own writable home folder for Claude Code (the code folder stays root-owned).
+KBH=/home/kb
+mkdir -p "$KBH"; chown kb:kb "$KBH"; chmod 700 "$KBH"
+[ "$(getent passwd kb | cut -d: -f6)" = "$KBH" ] || usermod -d "$KBH" kb
+CL=$KBH/.local/bin/claude
+if [ ! -x "$CL" ]; then
   echo "== Installing Claude Code for the kb user"
-  sudo -u kb -H bash -c 'cd /opt/kb && curl -fsSL https://claude.ai/install.sh | bash' >/dev/null
+  sudo -u kb -H bash -c 'cd ~ && curl -fsSL https://claude.ai/install.sh | bash' >/dev/null
 fi
-"$KB/.local/bin/claude" --version
+"$CL" --version
 
 cat <<'TXT'
 
@@ -18,7 +23,7 @@ Next, Claude Code prints a link. Open it, sign in to claude.ai, approve, and pas
 back here. At the end it prints a long token starting with sk-ant-oat. Copy that whole token.
 TXT
 read -r -p "Press Enter to start..." _
-sudo -u kb -H "$KB/.local/bin/claude" setup-token || true
+sudo -u kb -H "$CL" setup-token || true
 
 printf '\033[?2004l'
 echo
@@ -33,7 +38,7 @@ printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\nKB_AUTO_SUMMARIZE=1\n' "$T" >> "$ENVF"
 chown kb:kb "$ENVF"; chmod 600 "$ENVF"
 
 echo "== Testing"
-if OUT=$(cd /tmp && sudo -u kb -H env CLAUDE_CODE_OAUTH_TOKEN="$T" "$KB/.local/bin/claude" -p --model haiku --tools "" "Reply with just: ok" 2>&1); then
+if OUT=$(cd /tmp && sudo -u kb -H env CLAUDE_CODE_OAUTH_TOKEN="$T" "$CL" -p --model haiku --tools "" "Reply with just: ok" 2>&1); then
   echo "Claude replied: $OUT"
 else
   echo "Test failed: $OUT"; exit 1
