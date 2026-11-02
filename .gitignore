@@ -1,0 +1,7 @@
+.env
+*.sqlite
+*.sqlite-*
+data/
+venv/
+__pycache__/
+.public_url
