@@ -96,6 +96,8 @@ def _ask_claude_code(prompt):
     """One headless call on the user's Claude plan. No tools, empty working folder:
     the email text is data and must never be able to make it do anything."""
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    if os.path.isdir("/home/kb"):
+        env["HOME"] = "/home/kb"  # Claude Code keeps its settings there
     with tempfile.TemporaryDirectory() as d:
         r = subprocess.run(
             [_claude_bin(), "-p", "--model", os.environ.get("KB_CC_MODEL", "haiku"), "--output-format", "text",
