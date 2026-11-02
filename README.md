@@ -58,18 +58,15 @@ Either way: first run pulls 12 months, later runs the last 4 days. Password rese
 
 Check what is waiting (spends nothing): `sudo -u kb KB_HOME=/opt/kb /opt/kb/venv/bin/python /opt/kb/kb/summarize.py --estimate`
 
-## Upload Claude Code sessions from your computer
+## Upload Claude Code sessions from your computers
 
-Copy `local/kb_sync.py` to your computer, and create `~/.kb_sync.env`:
+**Windows (each computer):** open PowerShell and run
 ```
-KB_URL=https://<your host>/kb
-KB_TOKEN=<from: grep KB_TOKEN /opt/kb/.env>
+irm https://srv1122155.hstgr.cloud/kb/setup.ps1 | iex
 ```
-Run `python3 kb_sync.py`. Schedule it:
-- **Mac/Linux:** `crontab -e` → `0 */3 * * * /usr/bin/python3 $HOME/kb_sync.py >> $HOME/.kb_sync.log 2>&1`
-- **Windows:** Task Scheduler → Create Basic Task → Daily, repeat every 3 hours → Program `python`, argument `C:\Users\<you>\kb_sync.py`.
+Paste your `KB_TOKEN` when asked. It saves `%USERPROFILE%\.kb_sync.env`, installs `%USERPROFILE%\kb_sync.ps1`, sets Claude Code's `cleanupPeriodDays` to 365, schedules a hidden "KB Sync" task every 3 hours and uploads everything once. Log: `%USERPROFILE%\.kb_sync.log`. Each computer's sessions are kept apart by computer name.
 
-Claude Code deletes sessions after 30 days. To keep them longer, add `"cleanupPeriodDays": 365` to `~/.claude/settings.json`.
+**Mac/Linux:** copy `local/kb_sync.py`, create `~/.kb_sync.env` with `KB_URL` and `KB_TOKEN`, and add a crontab line: `0 */3 * * * /usr/bin/python3 $HOME/kb_sync.py >> $HOME/.kb_sync.log 2>&1`
 
 ## Search from Claude (any device)
 

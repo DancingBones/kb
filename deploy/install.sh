@@ -74,7 +74,7 @@ docker rm -f kb-api >/dev/null 2>&1 || true
 docker run -d --name kb-api --restart unless-stopped \
   --user "$(id -u kb):$(id -g kb)" \
   -e KB_HOME=$KB -e KB_TOKEN="$TOKEN" -e PYTHONUNBUFFERED=1 -e PYTHONDONTWRITEBYTECODE=1 \
-  -v "$KB/kb:$KB/kb:ro" -v "$DATA:$DATA" \
+  -v "$KB/kb:$KB/kb:ro" -v "$KB/local:$KB/local:ro" -v "$DATA:$DATA" \
   --memory 512m --read-only --tmpfs /tmp \
   "${NET_ARGS[@]}" "${LABELS[@]}" \
   python:3.12-slim python "$KB/kb/server.py" >/dev/null

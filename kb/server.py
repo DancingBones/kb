@@ -137,6 +137,10 @@ class H(BaseHTTPRequestHandler):
         g = lambda k: (qs.get(k) or [None])[0]  # noqa: E731
         if path == "/health":
             return self._send(200, {"ok": True})
+        if path in ("/setup.ps1", "/kb_sync.ps1"):  # public scripts, no secrets inside
+            f = os.path.join(db.KB_HOME, "local", path[1:])
+            if os.path.exists(f):
+                return self._send(200, open(f, "rb").read(), "text/plain; charset=utf-8")
         if path.startswith("/.well-known/") or path == "/":
             return self._send(404, {"error": "not found"})  # no OAuth: the token is in the connector URL
         if path.startswith("/mcp/"):
