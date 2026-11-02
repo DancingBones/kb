@@ -85,7 +85,7 @@ def backend():
 
 def _claude_bin():
     from db import KB_HOME
-    for p in (shutil.which("claude"), os.path.join(KB_HOME, ".local", "bin", "claude")):
+    for p in (os.path.join(KB_HOME, ".local", "bin", "claude"), shutil.which("claude")):
         if p and os.path.exists(p):
             return p
     raise RuntimeError("claude CLI not installed; run deploy/set_claude.sh")
