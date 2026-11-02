@@ -8,7 +8,7 @@ Your email, Claude Code sessions and notes in one SQLite file on your Hostinger 
 |---|---|---|
 | VPS `/opt/kb/data/kb.sqlite` | The database: `docs` table, FTS5 index kept in sync by triggers, `ingest_state` watermarks | `kb/db.py` |
 | VPS, cron every 6 hours | Runs every connector; a failure in one is logged and the rest keep going | `kb/ingest_all.py` |
-| VPS | Gmail (read-only API), uploaded Claude Code sessions, uploaded notes | `kb/connectors.py` |
+| VPS | Gmail (read-only), HighLevel (read-only API), uploaded Claude Code sessions, uploaded notes | `kb/connectors.py` |
 | VPS | Claude Haiku summaries (segments + atoms) for long items, off until you approve the cost | `kb/summarize.py` |
 | VPS, Docker container `kb-api` behind n8n's Traefik | HTTPS search API and MCP endpoint at `https://<your host>/kb` | `kb/server.py` |
 | Your computer(s) | Uploads new/changed `~/.claude/projects` sessions | `local/kb_sync.py` |
@@ -49,6 +49,16 @@ The connector opens All Mail in read-only mode (it never marks mail as read or c
 **Alternative: Gmail API with `gmail.readonly`** (used only when no app password is set). Needs a Google Cloud OAuth "Desktop app" client saved as `data/secrets/gmail_client.json`, then `sudo -u kb KB_HOME=/opt/kb /opt/kb/venv/bin/python /opt/kb/kb/gmail_auth.py`. If the OAuth app stays in "Testing", Google expires the sign-in every 7 days.
 
 Either way: first run pulls 12 months, later runs the last 4 days. Password reset, verification and 2FA emails are skipped; anything that looks like a key or password is masked before it is stored.
+
+## HighLevel (GoHighLevel)
+
+One searchable document per contact: details, tags, opportunities (with pipeline stage and value), appointments, notes and every SMS, email and chat message. Read-only: the connector only sends GET requests.
+
+1. In HighLevel, open the sub-account, then Settings → Private Integrations → Create new integration. Name it "Knowledge base" and tick only these read-only scopes: View Contacts, View Conversations, View Conversation Messages, View Opportunities, View Calendars, View Calendar Events.
+2. Copy the token (starts with `pit-`). Copy the Location ID from Settings → Business Profile, or just copy the browser address while inside the sub-account.
+3. In the Hostinger Browser terminal: `bash /opt/kb/deploy/set_ghl.sh`
+
+It checks each scope, then pulls every contact in the background. Every 6 hours after that it updates contacts with new messages, changes or opportunities, and rebuilds everything once a week so new notes and deletions are picked up. The token does not expire on its own; delete the integration in HighLevel to revoke it.
 
 ## Summaries (Claude Haiku)
 

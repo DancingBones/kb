@@ -34,6 +34,8 @@ def main(only=None):
             log_ingest(con, name, False, f"{type(e).__name__}: {e}")
             print(f"  {name}: FAILED {type(e).__name__}: {e}", flush=True)
             traceback.print_exc()
+    if only:  # a one-off run for one connector leaves summaries to the 6-hourly job
+        return
     if env_flag("KB_AUTO_SUMMARIZE"):
         try:
             import summarize

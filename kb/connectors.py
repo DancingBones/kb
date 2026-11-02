@@ -349,4 +349,260 @@ def gmail_any(con):
     return "not set up (add GMAIL_USER and GMAIL_APP_PASSWORD to .env)"
 
 
-CONNECTORS = {"gmail": gmail_any, "claude_code": claude_code, "notes": notes}
+# ================================================================= HighLevel
+# One document per contact: their details, tags, opportunities, appointments,
+# notes and every SMS / email / chat message, so a search for a client's name
+# finds everything about them. Read-only: only GET requests are ever sent.
+GHL_BASE = "https://services.leadconnectorhq.com"
+GHL_FULL_EVERY_DAYS = 7          # rebuild every contact once a week (catches new notes)
+GHL_MAX_MESSAGES = 2000          # per conversation
+
+
+def _ghl_get(path, params=None):
+    import time
+    from urllib.error import HTTPError, URLError
+    from urllib.parse import urlencode
+    from urllib.request import Request, urlopen
+
+    tok = env("GHL_TOKEN")
+    if not tok:
+        raise RuntimeError("HighLevel not set up. Run: bash /opt/kb/deploy/set_ghl.sh")
+    params = {k: v for k, v in (params or {}).items() if v is not None}
+    url = GHL_BASE + path + ("?" + urlencode(params) if params else "")
+    last = None
+    for attempt in range(6):
+        req = Request(url, headers={"Authorization": f"Bearer {tok}", "Version": "2021-07-28",
+                                    "Accept": "application/json", "User-Agent": "kb-ingest/1"})
+        try:
+            with urlopen(req, timeout=60) as r:
+                data = r.read()
+            time.sleep(0.12)  # HighLevel allows 100 requests per 10 seconds
+            return json.loads(data or b"{}")
+        except HTTPError as e:
+            body = e.read()[:300].decode(errors="replace")
+            last = f"HighLevel {e.code} on {path}: {body}"
+            if e.code == 429 or e.code >= 500:
+                time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError(last)
+        except URLError as e:
+            last = f"HighLevel network error on {path}: {e}"
+            time.sleep(2 ** attempt)
+    raise RuntimeError(last)
+
+
+def _ghl_pages(path, params, key, limit=100):
+    """Cursor pages (meta.startAfterId / meta.startAfter), as /contacts/ and /opportunities/search use."""
+    params = dict(params, limit=limit)
+    seen = set()
+    while True:
+        d = _ghl_get(path, params)
+        items = d.get(key) or []
+        fresh = [x for x in items if x.get("id") not in seen]
+        if not fresh:
+            return
+        for x in fresh:
+            seen.add(x.get("id"))
+            yield x
+        meta = d.get("meta") or {}
+        if len(items) < limit or not meta.get("startAfterId"):
+            return
+        params = dict(params, startAfterId=meta["startAfterId"], startAfter=meta.get("startAfter"))
+
+
+def _ghl_ts(v):
+    """HighLevel dates come as epoch milliseconds or ISO strings. Returns ISO UTC or ''."""
+    if v in (None, ""):
+        return ""
+    try:
+        if isinstance(v, (int, float)) or str(v).isdigit():
+            return datetime.fromtimestamp(int(v) / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return ""
+
+
+def _ghl_conversations(loc, contact_id):
+    d = _ghl_get("/conversations/search", {"locationId": loc, "contactId": contact_id, "limit": 100})
+    return d.get("conversations") or []
+
+
+def _ghl_messages(conv_id):
+    out, last_id = [], None
+    while len(out) < GHL_MAX_MESSAGES:
+        d = (_ghl_get(f"/conversations/{conv_id}/messages", {"limit": 100, "lastMessageId": last_id})
+             .get("messages") or {})
+        msgs = d.get("messages") or []
+        if not msgs:
+            break
+        out.extend(msgs)
+        new_last = d.get("lastMessageId") or msgs[-1].get("id")
+        if not d.get("nextPage") or new_last == last_id:
+            break
+        last_id = new_last
+    return out
+
+
+def _ghl_recent_conversation_contacts(loc, since_iso):
+    """Contact ids whose conversations had a message after since_iso (newest first, stop when older)."""
+    ids, after, seen = set(), None, set()
+    while True:
+        d = _ghl_get("/conversations/search", {"locationId": loc, "limit": 100, "sort": "desc",
+                                               "sortBy": "last_message_date", "startAfterDate": after})
+        convs = [c for c in d.get("conversations") or [] if c.get("id") not in seen]
+        if not convs:
+            return ids
+        for c in convs:
+            seen.add(c.get("id"))
+            if _ghl_ts(c.get("lastMessageDate")) < since_iso:
+                return ids
+            if c.get("contactId"):
+                ids.add(c["contactId"])
+        after = convs[-1].get("lastMessageDate")
+        if not after or len(seen) > 20000:
+            return ids
+
+
+def _ghl_contact_text(c, opps, appts, notes_, convs, stages):
+    name = (c.get("contactName") or " ".join(x for x in (c.get("firstName"), c.get("lastName")) if x)
+            or c.get("companyName") or c.get("email") or c.get("phone") or "(no name)").strip()
+    lines = [f"HighLevel contact: {name}"]
+    for label, k in (("Company", "companyName"), ("Email", "email"), ("Phone", "phone"),
+                     ("Source", "source"), ("Type", "type")):
+        if c.get(k):
+            lines.append(f"{label}: {c[k]}")
+    addr = ", ".join(x for x in (c.get("address1"), c.get("city"), c.get("state"), c.get("postalCode")) if x)
+    if addr:
+        lines.append(f"Address: {addr}")
+    if c.get("tags"):
+        lines.append("Tags: " + ", ".join(c["tags"]))
+    if c.get("dateAdded"):
+        lines.append(f"Added: {_ghl_ts(c['dateAdded'])[:10]}")
+    if opps:
+        lines.append("\nOpportunities:")
+        for o in opps:
+            val = f", ${o['monetaryValue']}" if o.get("monetaryValue") else ""
+            stage = stages.get(o.get("pipelineStageId"), "")
+            lines.append(f"- {o.get('name') or '(unnamed)'}: {o.get('status', '')}"
+                         f"{' / ' + stage if stage else ''}{val} (created {_ghl_ts(o.get('createdAt'))[:10]})")
+    if appts:
+        lines.append("\nAppointments:")
+        for a in sorted(appts, key=lambda a: _ghl_ts(a.get("startTime"))):
+            lines.append(f"- {_ghl_ts(a.get('startTime'))[:16].replace('T', ' ')} {a.get('title') or ''} "
+                         f"[{a.get('appointmentStatus') or a.get('status') or ''}] {a.get('_calendar', '')}".rstrip())
+    if notes_:
+        lines.append("\nNotes:")
+        for n in sorted(notes_, key=lambda n: n.get("dateAdded") or ""):
+            lines.append(f"- {_ghl_ts(n.get('dateAdded'))[:10]}: {_html_to_text(n.get('body') or '')}")
+    for conv, msgs in convs:
+        if not msgs:
+            continue
+        lines.append("\nMessages:")
+        for m in sorted(msgs, key=lambda m: _ghl_ts(m.get("dateAdded"))):
+            kind = str(m.get("messageType") or m.get("type") or "").replace("TYPE_", "").lower()
+            body = m.get("body") or ""
+            if "<" in body and ">" in body:
+                body = _html_to_text(body)
+            if not body and kind == "call":
+                body = f"(call, {m.get('status') or ''})"
+            if not body:
+                continue
+            who = "them" if m.get("direction") == "inbound" else "us"
+            lines.append(f"[{_ghl_ts(m.get('dateAdded'))[:16].replace('T', ' ')}] {kind} {who}: {body.strip()}")
+    return name, "\n".join(lines)
+
+
+def ghl(con):
+    loc = env("GHL_LOCATION_ID")
+    if not env("GHL_TOKEN") or not loc:
+        return "not set up (run deploy/set_ghl.sh)"
+    started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    wm, full_wm = get_wm(con, "ghl"), get_wm(con, "ghl", "full")
+    full = not wm or not full_wm or full_wm < (datetime.now(timezone.utc) - timedelta(days=GHL_FULL_EVERY_DAYS)
+                                                 ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    warnings = []
+
+    contacts = {c["id"]: c for c in _ghl_pages("/contacts/", {"locationId": loc}, "contacts")}
+
+    stages = {}
+    try:
+        for p in _ghl_get("/opportunities/pipelines", {"locationId": loc}).get("pipelines") or []:
+            for s in p.get("stages") or []:
+                stages[s.get("id")] = f"{p.get('name', '')}: {s.get('name', '')}"
+    except Exception as e:
+        warnings.append(f"pipelines: {e}")
+    opps = {}
+    try:
+        for o in _ghl_pages("/opportunities/search", {"location_id": loc, "status": "all"}, "opportunities"):
+            opps.setdefault(o.get("contactId"), []).append(o)
+    except Exception as e:
+        warnings.append(f"opportunities: {e}")
+
+    appts = {}
+    try:
+        now = datetime.now(timezone.utc)
+        start = int((now - timedelta(days=365)).timestamp() * 1000)
+        end = int((now + timedelta(days=120)).timestamp() * 1000)
+        for cal in _ghl_get("/calendars/", {"locationId": loc}).get("calendars") or []:
+            evs = _ghl_get("/calendars/events", {"locationId": loc, "calendarId": cal["id"],
+                                                 "startTime": start, "endTime": end}).get("events") or []
+            for ev in evs:
+                ev["_calendar"] = cal.get("name", "")
+                appts.setdefault(ev.get("contactId"), []).append(ev)
+    except Exception as e:
+        warnings.append(f"appointments: {e}")
+
+    if full:
+        todo = set(contacts)
+    else:
+        todo = {cid for cid, c in contacts.items() if _ghl_ts(c.get("dateUpdated") or c.get("dateAdded")) >= wm}
+        todo |= {cid for cid, os_ in opps.items() if any(_ghl_ts(o.get("updatedAt")) >= wm for o in os_)}
+        todo |= {cid for cid, es in appts.items() if any(_ghl_ts(e.get("dateUpdated")) >= wm for e in es)}
+        try:
+            todo |= _ghl_recent_conversation_contacts(loc, wm)
+        except Exception as e:
+            warnings.append(f"recent conversations: {e}")
+        todo = {cid for cid in todo if cid in contacts}
+
+    done = failed = 0
+    for cid in todo:
+        c = contacts[cid]
+        try:
+            try:
+                notes_ = _ghl_get(f"/contacts/{cid}/notes").get("notes") or []
+            except RuntimeError as e:
+                notes_ = []
+                if ("401" in str(e) or "403" in str(e)) and "notes: no access" not in warnings:
+                    warnings.append("notes: no access")
+            convs = []
+            for conv in _ghl_conversations(loc, cid):
+                convs.append((conv, _ghl_messages(conv["id"])))
+            name, text = _ghl_contact_text(c, opps.get(cid, []), appts.get(cid, []), notes_, convs, stages)
+            dates = [_ghl_ts(c.get("dateAdded")), _ghl_ts(c.get("dateUpdated"))]
+            dates += [_ghl_ts(conv.get("lastMessageDate")) for conv, _ in convs]
+            ts = max(d for d in dates if d) if any(dates) else started
+            meta = {"url": f"https://app.gohighlevel.com/v2/location/{loc}/contacts/detail/{cid}",
+                    "email": c.get("email"), "phone": c.get("phone")}
+            replace_rows(con, "ghl", cid, _rows_for("ghl", cid, ts, f"{name} (HighLevel)", text, meta))
+            done += 1
+        except Exception as e:
+            failed += 1
+            print(f"  ghl contact {cid}: {type(e).__name__}: {e}")
+            if failed >= 20 and done == 0:
+                raise
+    gone = [r[0] for r in con.execute("SELECT DISTINCT source_id FROM docs WHERE source='ghl'")
+            if r[0] not in contacts]
+    if full:  # contacts deleted in HighLevel leave the knowledge base on the weekly rebuild
+        for sid in gone:
+            replace_rows(con, "ghl", sid, [])
+        set_wm(con, "ghl", started, "full")
+    set_wm(con, "ghl", started)
+    msg = (f"{done} contacts {'rebuilt (full)' if full else 'updated'} of {len(contacts)}, "
+           f"{failed} failed, {sum(map(len, opps.values()))} opportunities, "
+           f"{sum(map(len, appts.values()))} appointments")
+    if warnings:
+        msg += "; " + "; ".join(warnings[:5])
+    return msg
+
+
+CONNECTORS = {"gmail": gmail_any, "claude_code": claude_code, "notes": notes, "ghl": ghl}
