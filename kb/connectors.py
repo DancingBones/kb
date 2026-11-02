@@ -422,6 +422,22 @@ def _ghl_ts(v):
         return ""
 
 
+GHL_FORMAT = "2"  # bump when the document layout changes, so the next run rebuilds every contact
+
+
+def _ghl_local(v):
+    """Display time in the studio's time zone (KB_TZ, default America/Denver), e.g. 2026-09-08 10:00."""
+    iso = _ghl_ts(v)
+    if not iso:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ZoneInfo(env("KB_TZ", "America/Denver")))
+        return t.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return iso[:16].replace("T", " ") + " UTC"
+
+
 def _ghl_conversations(loc, contact_id):
     d = _ghl_get("/conversations/search", {"locationId": loc, "contactId": contact_id, "limit": 100})
     return d.get("conversations") or []
@@ -488,7 +504,7 @@ def _ghl_contact_text(c, opps, appts, notes_, convs, stages):
     if appts:
         lines.append("\nAppointments:")
         for a in sorted(appts, key=lambda a: _ghl_ts(a.get("startTime"))):
-            lines.append(f"- {_ghl_ts(a.get('startTime'))[:16].replace('T', ' ')} {a.get('title') or ''} "
+            lines.append(f"- {_ghl_local(a.get('startTime'))} {a.get('title') or ''} "
                          f"[{a.get('appointmentStatus') or a.get('status') or ''}] {a.get('_calendar', '')}".rstrip())
     if notes_:
         lines.append("\nNotes:")
@@ -508,7 +524,7 @@ def _ghl_contact_text(c, opps, appts, notes_, convs, stages):
             if not body:
                 continue
             who = "them" if m.get("direction") == "inbound" else "us"
-            lines.append(f"[{_ghl_ts(m.get('dateAdded'))[:16].replace('T', ' ')}] {kind} {who}: {body.strip()}")
+            lines.append(f"[{_ghl_local(m.get('dateAdded'))}] {kind} {who}: {body.strip()}")
     return name, "\n".join(lines)
 
 
@@ -518,7 +534,7 @@ def ghl(con):
         return "not set up (run deploy/set_ghl.sh)"
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     wm, full_wm = get_wm(con, "ghl"), get_wm(con, "ghl", "full")
-    full = not wm or not full_wm or full_wm < (datetime.now(timezone.utc) - timedelta(days=GHL_FULL_EVERY_DAYS)
+    full = not wm or not full_wm or get_wm(con, "ghl", "format") != GHL_FORMAT or full_wm < (datetime.now(timezone.utc) - timedelta(days=GHL_FULL_EVERY_DAYS)
                                                  ).strftime("%Y-%m-%dT%H:%M:%SZ")
     warnings = []
 
@@ -602,6 +618,7 @@ def ghl(con):
         for sid in gone:
             replace_rows(con, "ghl", sid, [])
         set_wm(con, "ghl", started, "full")
+        set_wm(con, "ghl", GHL_FORMAT, "format")
     set_wm(con, "ghl", started)
     msg = (f"{done} contacts {'rebuilt (full)' if full else 'updated'} of {len(contacts)}, "
            f"{failed} failed, {sum(map(len, opps.values()))} opportunities, "
