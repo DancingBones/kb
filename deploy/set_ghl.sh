@@ -27,11 +27,11 @@ loc = env("GHL_LOCATION_ID")
 checks = [("Contacts and notes", "/contacts/", {"locationId": loc, "limit": 1}),
           ("Conversations and messages", "/conversations/search", {"locationId": loc, "limit": 1}),
           ("Opportunities", "/opportunities/search", {"location_id": loc, "limit": 1}),
-          ("Calendars", "/calendars/", {"locationId": loc})]
+          ("Calendars", "/calendars/", {"locationId": loc}, "2021-04-15")]
 bad = 0
-for label, path, p in checks:
+for label, path, p, *v in checks:
     try:
-        _ghl_get(path, p); print(f"  OK       {label}")
+        _ghl_get(path, p, *v); print(f"  OK       {label}")
     except Exception as e:
         bad += 1; print(f"  MISSING  {label}: {str(e)[:120]}")
 if bad == len(checks):

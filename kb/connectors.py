@@ -358,7 +358,7 @@ GHL_FULL_EVERY_DAYS = 7          # rebuild every contact once a week (catches ne
 GHL_MAX_MESSAGES = 2000          # per conversation
 
 
-def _ghl_get(path, params=None):
+def _ghl_get(path, params=None, version="2021-07-28"):
     import time
     from urllib.error import HTTPError, URLError
     from urllib.parse import urlencode
@@ -371,7 +371,7 @@ def _ghl_get(path, params=None):
     url = GHL_BASE + path + ("?" + urlencode(params) if params else "")
     last = None
     for attempt in range(6):
-        req = Request(url, headers={"Authorization": f"Bearer {tok}", "Version": "2021-07-28",
+        req = Request(url, headers={"Authorization": f"Bearer {tok}", "Version": version,
                                     "Accept": "application/json", "User-Agent": "kb-ingest/1"})
         try:
             with urlopen(req, timeout=60) as r:
@@ -543,12 +543,18 @@ def ghl(con):
         now = datetime.now(timezone.utc)
         start = int((now - timedelta(days=365)).timestamp() * 1000)
         end = int((now + timedelta(days=120)).timestamp() * 1000)
-        for cal in _ghl_get("/calendars/", {"locationId": loc}).get("calendars") or []:
-            evs = _ghl_get("/calendars/events", {"locationId": loc, "calendarId": cal["id"],
-                                                 "startTime": start, "endTime": end}).get("events") or []
-            for ev in evs:
-                ev["_calendar"] = cal.get("name", "")
-                appts.setdefault(ev.get("contactId"), []).append(ev)
+        month = 31 * 86400 * 1000  # HighLevel answers event lists best one month at a time
+        for cal in _ghl_get("/calendars/", {"locationId": loc}, "2021-04-15").get("calendars") or []:
+            seen_ev = set()
+            for t in range(start, end, month):
+                evs = _ghl_get("/calendars/events", {"locationId": loc, "calendarId": cal["id"], "startTime": t,
+                                                     "endTime": min(t + month, end) - 1}, "2021-04-15").get("events") or []
+                for ev in evs:
+                    if ev.get("deleted") or ev.get("id") in seen_ev:
+                        continue
+                    seen_ev.add(ev.get("id"))
+                    ev["_calendar"] = cal.get("name", "")
+                    appts.setdefault(ev.get("contactId"), []).append(ev)
     except Exception as e:
         warnings.append(f"appointments: {e}")
 
