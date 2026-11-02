@@ -192,7 +192,7 @@ def claude_code(con):
     for path in glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True):
         rel = os.path.relpath(path, root)
         st = os.stat(path)
-        key = f"{st.st_size}:{int(st.st_mtime)}"
+        key = f"v2:{st.st_size}:{int(st.st_mtime)}"  # bump v to re-read every session
         if get_wm(con, "claude_code", rel) == key:
             continue
         text, first_ts, last_ts, cwd, title = _session_text(path)
@@ -200,7 +200,11 @@ def claude_code(con):
             set_wm(con, "claude_code", key, rel)
             continue
         first_user = next((l[6:] for l in text.split("\n\n") if l.startswith("USER: ")), "")
-        title = title or (first_user[:90].replace("\n", " ") or os.path.basename(path))
+        if not title:
+            # Sessions started from a project thread begin with a <relay>/<cited>/<note> wrapper: title from the words inside
+            m = re.search(r"(?s)<cited[^>]*>(.*?)</cited>", first_user) or re.search(r"(?s)<note>(.*?)</note>", first_user)
+            words = re.sub(r"<[^>]+>", " ", m.group(1) if m else first_user)
+            title = " ".join(words.split())[:90] or os.path.basename(path)
         ts = last_ts or datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         meta = {"path": rel, "cwd": cwd, "started": first_ts}
         sid = rel[:-6]
