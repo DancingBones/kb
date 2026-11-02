@@ -137,6 +137,8 @@ class H(BaseHTTPRequestHandler):
         g = lambda k: (qs.get(k) or [None])[0]  # noqa: E731
         if path == "/health":
             return self._send(200, {"ok": True})
+        if path.startswith("/.well-known/") or path == "/":
+            return self._send(404, {"error": "not found"})  # no OAuth: the token is in the connector URL
         if path.startswith("/mcp/"):
             return self._send(405, {"error": "use POST"})
         if not self._authed():

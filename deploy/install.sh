@@ -55,16 +55,19 @@ if [ -n "$N8N" ] && [ -n "$TRAEFIK" ]; then
   RESOLVER=$(echo "$ALL" | grep -E '\.tls\.certresolver=' | head -1 | cut -d= -f2-)
   ENTRY=$(echo "$ALL" | grep -E '\.entrypoints=' | grep -v '=web$' | head -1 | cut -d= -f2-)
   NET=$(docker inspect "$TRAEFIK" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' | awk '{print $1}')
+  # The knowledge base gets its own hostname (the VPS name without "n8n."), so Claude's
+  # connector setup never finds n8n's sign-in page. Override with KB_HOST=... if needed.
+  KB_HOST=${KB_HOST:-${HOST#n8n.}}
   if [ -n "$HOST" ] && [ -n "$NET" ]; then
     NET_ARGS=(--network "$NET")
     LABELS=(-l traefik.enable=true
-      -l "traefik.http.routers.kb.rule=Host(\`$HOST\`) && PathPrefix(\`/kb\`)"
+      -l "traefik.http.routers.kb.rule=Host(\`$KB_HOST\`) || (Host(\`$HOST\`) && PathPrefix(\`/kb\`))"
       -l traefik.http.routers.kb.priority=1000
       -l traefik.http.routers.kb.tls=true
       -l "traefik.http.routers.kb.entrypoints=${ENTRY:-websecure}"
       -l traefik.http.services.kb.loadbalancer.server.port=8765)
     [ -n "$RESOLVER" ] && LABELS+=(-l "traefik.http.routers.kb.tls.certresolver=$RESOLVER")
-    PUBLIC_URL="https://$HOST/kb"
+    PUBLIC_URL="https://$KB_HOST/kb"
   fi
 fi
 docker rm -f kb-api >/dev/null 2>&1 || true
@@ -103,5 +106,7 @@ if [[ "$PUBLIC_URL" == https://* ]]; then
 fi
 echo
 echo "Done. Search URL: $PUBLIC_URL"
+TOKEN_SHOWN=$(grep '^KB_TOKEN=' "$ENVF" | cut -d= -f2)
+if [[ "$PUBLIC_URL" == https://* ]]; then echo "Claude connector URL (keep private): $PUBLIC_URL/mcp/$TOKEN_SHOWN"; fi
 echo "Your access token is in $ENVF (KB_TOKEN). Show it with:  grep KB_TOKEN $ENVF"
 echo "Ingest log: $DATA/logs/ingest.log"
