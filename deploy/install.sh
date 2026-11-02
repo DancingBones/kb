@@ -84,6 +84,7 @@ echo "== 6/6 schedule (every 6 hours) and nightly backup"
 cat > /etc/cron.d/kb <<EOF
 SHELL=/bin/bash
 15 */6 * * * kb cd $KB && KB_HOME=$KB $KB/venv/bin/python kb/ingest_all.py >> $DATA/logs/ingest.log 2>&1
+50 * * * * root cd $KB && KB_HOME=$KB $KB/venv/bin/python kb/watchdog.py >> $DATA/logs/watchdog.log 2>&1
 40 3 * * * kb sqlite3 $DATA/kb.sqlite ".backup $DATA/backups/kb-\$(date +\%a).sqlite"
 EOF
 chmod 644 /etc/cron.d/kb
