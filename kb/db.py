@@ -47,6 +47,19 @@ CREATE TABLE IF NOT EXISTS ingest_log (
 """
 
 
+def env(name, default=None):
+    """Read a setting from the environment or from KB_HOME/.env."""
+    if os.environ.get(name):
+        return os.environ[name]
+    path = os.path.join(KB_HOME, ".env")
+    if os.path.exists(path):
+        for line in open(path):
+            line = line.strip()
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1].strip().strip("\"'") or default
+    return default
+
+
 def connect(path=None):
     path = path or DB_PATH
     os.makedirs(os.path.dirname(path), exist_ok=True)

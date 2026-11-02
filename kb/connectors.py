@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
 
-from db import KB_HOME, chunk, get_wm, item_exists, replace_rows, set_wm
+from db import KB_HOME, chunk, env, get_wm, item_exists, replace_rows, set_wm
 
 DATA = os.path.join(KB_HOME, "data")
 SECRETS = os.path.join(DATA, "secrets")
@@ -230,4 +230,121 @@ def notes(con):
     return f"{added} files updated"
 
 
-CONNECTORS = {"gmail": gmail, "claude_code": claude_code, "notes": notes}
+# ====================================================================== Gmail over IMAP (app password)
+def _msg_text(msg):
+    plain, html = [], []
+    for part in msg.walk():
+        if part.is_multipart() or part.get_content_disposition() == "attachment":
+            continue
+        ct = part.get_content_type()
+        try:
+            payload = part.get_content()
+        except Exception:
+            raw = part.get_payload(decode=True) or b""
+            payload = raw.decode(part.get_content_charset() or "utf-8", "replace")
+        if ct == "text/plain":
+            plain.append(payload)
+        elif ct == "text/html":
+            html.append(payload)
+    text = "\n".join(plain) if plain else _html_to_text("\n".join(html))
+    text = re.split(r"\n(?:On .{5,120} wrote:|-{2,} ?Original Message ?-{2,})", text)[0]
+    text = "\n".join(l for l in text.splitlines() if not l.startswith(">"))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def gmail_imap(con, first_run_days=365, rerun_days=4):
+    import email
+    import imaplib
+    from email import policy
+    from email.header import decode_header, make_header
+
+    user, pw = env("GMAIL_USER"), (env("GMAIL_APP_PASSWORD") or "").replace(" ", "")
+    M = imaplib.IMAP4_SSL("imap.gmail.com")
+    M.login(user, pw)
+    try:
+        folder = '"[Gmail]/All Mail"'
+        typ, boxes = M.list()
+        for b in boxes or []:
+            line = b.decode(errors="replace")
+            if "\\All" in line:
+                folder = line.split(' "/" ')[-1]
+                break
+        typ, data = M.select(folder, readonly=True)  # read-only: never changes read/unread state
+        if typ != "OK":
+            raise RuntimeError(f"cannot open {folder}: {data}")
+        validity = M.response("UIDVALIDITY")[1][0].decode()
+        wm = get_wm(con, "gmail", "imap_uid")
+        last_uid = int(wm.split(":")[1]) if wm and wm.split(":")[0] == validity else 0
+        days = rerun_days if last_uid else first_run_days
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y/%m/%d")
+        q = f"after:{since} -in:spam -in:trash -category:promotions -category:social"
+        typ, data = M.uid("SEARCH", "X-GM-RAW", f'"{q}"')
+        uids = [int(u) for u in (data[0] or b"").split()]
+        new = [u for u in uids if u > last_uid]
+        threads = set()
+        for i in range(0, len(new), 500):
+            batch = ",".join(str(u) for u in new[i:i + 500])
+            typ, rows = M.uid("FETCH", batch, "(X-GM-THRID)")
+            for r in rows or []:
+                m = re.search(rb"X-GM-THRID (\d+)", r if isinstance(r, bytes) else r[0])
+                if m:
+                    threads.add(int(m.group(1)))
+        added = skipped = 0
+        for tid in threads:
+            typ, data = M.uid("SEARCH", "X-GM-THRID", str(tid))
+            t_uids = (data[0] or b"").split()[-50:]
+            if not t_uids:
+                continue
+            try:
+                typ, rows = M.uid("FETCH", b",".join(t_uids).decode(), "(BODY.PEEK[])")
+            except imaplib.IMAP4.abort:
+                raise
+            except Exception as e:
+                print(f"  thread {tid}: {e}")
+                continue
+            msgs = [email.message_from_bytes(r[1], policy=policy.default) for r in rows if isinstance(r, tuple)]
+            if not msgs:
+                continue
+            msgs.sort(key=lambda m: _date(m))
+            subject = str(make_header(decode_header(msgs[0].get("subject", "(no subject)"))))
+            if SKIP_SUBJECT.search(subject):
+                skipped += 1
+                continue
+            parts, people = [], set()
+            for m in msgs:
+                people.add(str(m.get("from", "")))
+                parts.append(f"From: {m.get('from','')}\nTo: {m.get('to','')}\nDate: {_date(m)}\n\n{_msg_text(m)}")
+            last_ts = _date(msgs[-1])
+            text = f"Subject: {subject}\n\n" + "\n\n---\n\n".join(parts)
+            sid = format(tid, "x")
+            meta = {"url": f"https://mail.google.com/mail/u/0/#all/{sid}", "from": sorted(p for p in people if p)[:10],
+                    "messages": len(msgs), "account": user}
+            replace_rows(con, "gmail", sid, _rows_for("gmail", sid, last_ts, subject, text, meta))
+            added += 1
+        if uids:
+            set_wm(con, "gmail", f"{validity}:{max(max(uids), last_uid)}", "imap_uid")
+        set_wm(con, "gmail", datetime.now(timezone.utc).isoformat())
+        return f"{added} threads updated, {skipped} security emails skipped (IMAP, read-only)"
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+
+def _date(m):
+    try:
+        return parsedate_to_datetime(m.get("date")).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return "1970-01-01T00:00:00Z"
+
+
+def gmail_any(con):
+    if env("GMAIL_APP_PASSWORD"):
+        return gmail_imap(con)
+    if os.path.exists(os.path.join(SECRETS, "gmail_token.json")):
+        return gmail(con)
+    return "not set up (add GMAIL_USER and GMAIL_APP_PASSWORD to .env)"
+
+
+CONNECTORS = {"gmail": gmail_any, "claude_code": claude_code, "notes": notes}

@@ -35,17 +35,20 @@ Update later with `cd /opt/kb && GIT_SSH_COMMAND="ssh -i ~/.ssh/kb_deploy" git p
 
 The installer creates a `kb` service user, a Python venv, `/opt/kb/.env` with a random `KB_TOKEN`, the `kb-api` container (no public port: only Traefik reaches it, over HTTPS), the 6-hourly cron job, a nightly backup to `data/backups/`, and log rotation. It does not touch n8n.
 
-## Gmail (read-only)
+## Gmail
 
-1. [console.cloud.google.com](https://console.cloud.google.com) → create a project (e.g. "kb").
-2. APIs & Services → Library → **Gmail API** → Enable.
-3. OAuth consent screen → External → fill app name and your email → add yourself as a **Test user**. Then **Publish app** (Production) so the sign-in does not expire after 7 days; with only the read-only scope for your own account you can ignore the "unverified app" warning.
-4. Credentials → Create credentials → OAuth client ID → **Desktop app** → Download JSON.
-5. On the VPS: `nano /opt/kb/data/secrets/gmail_client.json`, paste the JSON, save. Then
-   `chown kb:kb /opt/kb/data/secrets/gmail_client.json && chmod 600 /opt/kb/data/secrets/gmail_client.json`
-6. `sudo -u kb KB_HOME=/opt/kb /opt/kb/venv/bin/python /opt/kb/kb/gmail_auth.py` and follow the prompts.
+**Easiest (recommended): app password over IMAP.** Never expires, no Google Cloud project needed.
+1. On the Gmail account: turn on 2-Step Verification, then create an app password at https://myaccount.google.com/apppasswords
+2. Add to `/opt/kb/.env`:
+   ```
+   GMAIL_USER=you@gmail.com
+   GMAIL_APP_PASSWORD=abcdefghijklmnop
+   ```
+The connector opens All Mail in read-only mode (it never marks mail as read or changes anything), even though an app password itself allows full access. Revoke it any time on the same Google page.
 
-First run pulls 12 months, later runs the last 4 days. Password reset, verification and 2FA emails are skipped; anything that looks like a key or password is masked before it is stored.
+**Alternative: Gmail API with `gmail.readonly`** (used only when no app password is set). Needs a Google Cloud OAuth "Desktop app" client saved as `data/secrets/gmail_client.json`, then `sudo -u kb KB_HOME=/opt/kb /opt/kb/venv/bin/python /opt/kb/kb/gmail_auth.py`. If the OAuth app stays in "Testing", Google expires the sign-in every 7 days.
+
+Either way: first run pulls 12 months, later runs the last 4 days. Password reset, verification and 2FA emails are skipped; anything that looks like a key or password is masked before it is stored.
 
 ## Anthropic key and summaries
 
